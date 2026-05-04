@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "mscw-opening-ai"
 version = "0.1.0"
@@ -17,6 +21,10 @@ dependencies = [
 ml = ["torch>=2.2", "gymnasium>=0.29"]
 web = ["playwright>=1.44"]
 dev = ["pytest>=8.0", "ruff>=0.5", "mypy>=1.10"]
+
+[tool.setuptools.packages.find]
+include = ["mscw_ai*"]
+exclude = ["configs*", "scripts*", "data*", "outputs*"]
 
 [tool.ruff]
 line-length = 100
