@@ -7,15 +7,7 @@ from mscw_ai.sim.environment import EpisodeResult, OpeningEnvironment as BaseOpe
 
 
 class OpeningEnvironment(BaseOpeningEnvironment):
-    """Safer opening-route environment.
-
-    V2 adds opening-route constraints:
-    - block extremely low hit-rate maps;
-    - fall back to lower-level maps only when needed;
-    - reduce optimistic meso estimates;
-    - penalize staying too long on the same map;
-    - penalize farming mobs far below the player level.
-    """
+    """Safer opening-route environment with hard route replacement filters."""
 
     def run_policy(self, action: PolicyAction) -> EpisodeResult:
         stats = self._base_stats()
@@ -26,6 +18,8 @@ class OpeningEnvironment(BaseOpeningEnvironment):
         total_ko = 0.0
         comfort_values: list[float] = []
         hard_min_hit = float(self.constraints.get('hard_min_hit_rate', 0.55))
+        max_same_map_streak = int(self.constraints.get('max_same_map_streak', 8))
+        max_over_level = float(self.constraints.get('max_over_level_gap', 12))
         same_map_streak: dict[int, int] = {}
 
         for level in range(self.start_level, self.target_level):
@@ -34,6 +28,7 @@ class OpeningEnvironment(BaseOpeningEnvironment):
             estimates = [self._estimate_spot(level, stats, spot, action) for spot in candidates]
             estimates = [self._apply_route_context(e, level, same_map_streak) for e in estimates]
             viable = [estimate for estimate in estimates if estimate['hit_rate'] >= hard_min_hit]
+            viable = self._prefer_replacement_routes(viable, level, same_map_streak, max_same_map_streak, max_over_level)
 
             if not viable:
                 fallback_spots = [
@@ -43,6 +38,7 @@ class OpeningEnvironment(BaseOpeningEnvironment):
                 fallback_estimates = [self._estimate_spot(level, stats, spot, action) for spot in fallback_spots]
                 fallback_estimates = [self._apply_route_context(e, level, same_map_streak) for e in fallback_estimates]
                 viable = [estimate for estimate in fallback_estimates if estimate['hit_rate'] >= hard_min_hit]
+                viable = self._prefer_replacement_routes(viable, level, same_map_streak, max_same_map_streak, max_over_level)
 
             if not viable:
                 break
@@ -84,6 +80,26 @@ class OpeningEnvironment(BaseOpeningEnvironment):
             estimate['score'] = float(estimate.get('score', 0.0)) - 120_000.0
         return estimate
 
+    def _prefer_replacement_routes(
+        self,
+        viable: list[dict[str, Any]],
+        level: int,
+        same_map_streak: dict[int, int],
+        max_same_map_streak: int,
+        max_over_level: float,
+    ) -> list[dict[str, Any]]:
+        if not viable:
+            return viable
+        preferred = []
+        for estimate in viable:
+            map_id = int(estimate['map_id'])
+            avg_mob_level = self._avg_level_for_map(map_id)
+            too_tired = same_map_streak.get(map_id, 0) >= max_same_map_streak
+            too_low = level - avg_mob_level > max_over_level
+            if not too_tired and not too_low:
+                preferred.append(estimate)
+        return preferred or viable
+
     def _apply_route_context(self, estimate: dict[str, Any], level: int, same_map_streak: dict[int, int]) -> dict[str, Any]:
         out = dict(estimate)
         map_id = int(out['map_id'])
@@ -92,11 +108,11 @@ class OpeningEnvironment(BaseOpeningEnvironment):
         over_level = max(0.0, level - avg_mob_level)
 
         if streak >= 8:
-            out['score'] = float(out['score']) - (streak - 7) * 15_000.0
+            out['score'] = float(out['score']) - (streak - 7) * 30_000.0
             out['route_context_note'] = 'same_map_fatigue'
 
         if over_level >= 10:
-            penalty = (over_level - 9.0) * 12_000.0
+            penalty = (over_level - 9.0) * 18_000.0
             out['score'] = float(out['score']) - penalty
             out['low_level_mob_penalty'] = round(penalty, 1)
 
@@ -128,6 +144,6 @@ class OpeningEnvironment(BaseOpeningEnvironment):
             else:
                 current_map = map_id
                 streak = 1
-            if streak > 10:
-                penalty += (streak - 10) * 35.0
+            if streak > 8:
+                penalty += (streak - 8) * 120.0
         return penalty
