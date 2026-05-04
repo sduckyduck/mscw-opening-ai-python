@@ -4,6 +4,7 @@ from dataclasses import asdict
 from typing import Any
 
 from mscw_ai.sim.environment import EpisodeResult, OpeningEnvironment as BaseOpeningEnvironment, PolicyAction
+from mscw_ai.sim.map_rules import is_training_accessible_map
 
 
 class OpeningEnvironment(BaseOpeningEnvironment):
@@ -24,7 +25,7 @@ class OpeningEnvironment(BaseOpeningEnvironment):
 
         for level in range(self.start_level, self.target_level):
             self._allocate_ap(stats, level, action.dex_policy)
-            candidates = self._eligible_spots(level, action.risk_policy)
+            candidates = [spot for spot in self._eligible_spots(level, action.risk_policy) if is_training_accessible_map(spot, self.config)]
             estimates = [self._estimate_spot(level, stats, spot, action) for spot in candidates]
             estimates = [self._apply_route_context(e, level, same_map_streak) for e in estimates]
             viable = [estimate for estimate in estimates if estimate['hit_rate'] >= hard_min_hit]
@@ -33,7 +34,8 @@ class OpeningEnvironment(BaseOpeningEnvironment):
             if not viable:
                 fallback_spots = [
                     spot for spot in self.spots
-                    if max(1, level - 25) <= float(spot.get('avg_level', 1)) <= level
+                    if is_training_accessible_map(spot, self.config)
+                    and max(1, level - 25) <= float(spot.get('avg_level', 1)) <= level
                 ]
                 fallback_estimates = [self._estimate_spot(level, stats, spot, action) for spot in fallback_spots]
                 fallback_estimates = [self._apply_route_context(e, level, same_map_streak) for e in fallback_estimates]
