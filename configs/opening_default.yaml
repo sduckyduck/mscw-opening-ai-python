@@ -2,6 +2,7 @@ seed: 42
 job: spearman
 start_level: 10
 target_level: 50
+version_rules_path: configs/versions/mscw_default.yaml
 
 constraints:
   min_hit_rate: 0.75
