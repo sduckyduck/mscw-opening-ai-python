@@ -1,0 +1,50 @@
+version_id: mscw_default
+version_name: MapleStory Classic World Default
+source: unpacked_app_metadata
+
+formulas:
+  accuracy:
+    type: meowdb_like_physical
+    hard_min_hit_rate: 0.55
+    preferred_hit_rate: 0.90
+  physical_damage:
+    type: classic_physical_range
+    base_crit_rate: 0.05
+    base_crit_damage: 0.20
+    damage_cap: 700000000000
+  magic_damage:
+    type: classic_magic_range
+    elemental_bonus: 0.25
+  defense:
+    type: classic_defense_reduction
+
+progression:
+  first_job_level: 10
+  second_job_level: 30
+  ap_per_level: 5
+  sp_at_first_job: 1
+  sp_per_level_after_first_job: 3
+
+economy:
+  meso_model: conservative_proxy
+  meso_income_multiplier: 0.25
+  potion_price_multiplier: 1.0
+  bankruptcy_allowed: false
+
+drops:
+  enabled: true
+  model: low_rate_proxy
+  expected_equipment_drops_per_hour: 0.8
+  own_class_equipment_probability: 0.22
+  useful_upgrade_probability: 0.12
+  equip_if_upgrade_score_above: 1.0
+
+routing:
+  excluded_training_map_ids:
+    - 80001100
+  excluded_name_keywords:
+    - job advancement
+    - training camp
+    - tutorial
+  max_same_map_streak: 8
+  max_over_level_gap: 12
