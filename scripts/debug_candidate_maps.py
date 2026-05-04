@@ -7,6 +7,7 @@ from mscw_ai.rl.q_learning import active_actions
 from mscw_ai.sim.environment_v2 import OpeningEnvironment
 from mscw_ai.sim.map_rules import is_training_accessible_map
 from mscw_ai.utils.io import read_yaml, write_json
+from mscw_ai.versioning.rules import load_version_rules, merge_rules_into_config
 
 
 def choose_action(config: dict, action_id: str):
@@ -55,9 +56,20 @@ def inspect_level(env: OpeningEnvironment, action, level: int, top: int):
     }
 
 
+def load_config(config_path: str, version_path: str | None) -> dict:
+    config = read_yaml(config_path)
+    selected_version_path = version_path or config.get('version_rules_path')
+    if selected_version_path:
+        rules = load_version_rules(selected_version_path)
+        config = merge_rules_into_config(config, rules)
+        print(f'Using version rules: {rules.version_id} - {rules.version_name}')
+    return config
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', default='configs/opening_default.yaml')
+    parser.add_argument('--version', default=None)
     parser.add_argument('--from-level', type=int, default=41)
     parser.add_argument('--to-level', type=int, default=50)
     parser.add_argument('--action-id', default='standard_drop_normal')
@@ -65,7 +77,7 @@ def main():
     parser.add_argument('--out', default='outputs/reports/candidate_debug.json')
     args = parser.parse_args()
 
-    config = read_yaml(args.config)
+    config = load_config(args.config, args.version)
     env = OpeningEnvironment(config.get('paths', {}).get('processed_dir', 'data/processed'), config)
     action = choose_action(config, args.action_id)
     report = [inspect_level(env, action, lv, args.top) for lv in range(args.from_level, args.to_level + 1)]
