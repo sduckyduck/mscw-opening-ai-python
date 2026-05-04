@@ -7,11 +7,22 @@ from typing import Any
 
 from mscw_ai.sim.environment import OpeningEnvironment, POLICY_ACTIONS
 
-DISABLED_POLICY_IDS = {'highacc_shop_greedy'}
+# Temporarily disabled until real gear purchase/craft/drop economics are wired.
+# Otherwise these actions can win with gear_cost = 0, which is misleading.
+DEFAULT_DISABLED_POLICY_IDS = {
+    'highacc_shop_greedy',
+    'standard_shop_normal',
+    'standard_craft_stable',
+    'weaponreq_hybrid_fast',
+}
 
 
-def active_actions() -> list:
-    return [action for action in POLICY_ACTIONS if action.id not in DISABLED_POLICY_IDS]
+def active_actions(config: dict[str, Any] | None = None) -> list:
+    disabled = set(DEFAULT_DISABLED_POLICY_IDS)
+    if config:
+        disabled.update(config.get('disabled_policy_ids', []) or [])
+        disabled.update(config.get('training', {}).get('disabled_policy_ids', []) or [])
+    return [action for action in POLICY_ACTIONS if action.id not in disabled]
 
 
 def train_q_learning(env: OpeningEnvironment, config: dict[str, Any]) -> dict[str, Any]:
@@ -23,7 +34,9 @@ def train_q_learning(env: OpeningEnvironment, config: dict[str, Any]) -> dict[st
     eps_end = float(training.get('epsilon_end', 0.05))
     seed = int(config.get('seed', 42))
     rng = random.Random(seed)
-    actions = active_actions()
+    actions = active_actions(config)
+    if not actions:
+        raise ValueError('No active policy actions remain after disabled_policy_ids are applied.')
 
     q_values = {action.id: 0.0 for action in actions}
     history = []
@@ -65,10 +78,11 @@ def train_q_learning(env: OpeningEnvironment, config: dict[str, Any]) -> dict[st
     if best is None or learned_result.reward >= best['result']['reward']:
         best = {'action': asdict(learned_action), 'result': asdict(learned_result)}
 
+    disabled = sorted(set(action.id for action in POLICY_ACTIONS) - set(q_values.keys()))
     return {
         'algorithm': 'q_learning',
         'episodes': episodes,
-        'disabled_policy_ids': sorted(DISABLED_POLICY_IDS),
+        'disabled_policy_ids': disabled,
         'q_values': {a.label: round(q_values[a.id], 4) for a in actions},
         'best': best,
         'history': history,
