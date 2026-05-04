@@ -29,3 +29,55 @@ BASIC_SKILLS_BY_JOB = {
     'page': WARRIOR_SKILLS,
     'spearman': WARRIOR_SKILLS,
 }
+
+
+def sp_for_level(level: int) -> int:
+    if level < 10:
+        return 0
+    return 1 if level == 10 else 3
+
+
+def stage_for_level(level: int) -> int:
+    return 1 if level < 30 else 2
+
+
+def available_sp_actions(job: str, level: int, skills: dict[str, int]) -> list[SpAction]:
+    points = sp_for_level(level)
+    if points <= 0:
+        return []
+    rules = BASIC_SKILLS_BY_JOB.get(job, [])
+    actions: list[SpAction] = []
+    stage = stage_for_level(level)
+    for rule in rules:
+        if rule.stage > stage:
+            continue
+        current = skills.get(rule.skill_id, 0)
+        if current >= rule.max_level:
+            continue
+        if rule.prereq_skill_id and skills.get(rule.prereq_skill_id, 0) < rule.prereq_level:
+            continue
+        actions.append(SpAction(rule.skill_id, rule.name, min(points, rule.max_level - current)))
+    return actions or [SpAction('hold_sp', 'Hold SP', 0)]
+
+
+def apply_sp(skills: dict[str, int], action: SpAction) -> dict[str, int]:
+    out = dict(skills)
+    if action.points > 0:
+        out[action.skill_id] = out.get(action.skill_id, 0) + action.points
+    return out
+
+
+def skill_accuracy(skills: dict[str, int]) -> int:
+    return int(skills.get('warrior_precise_strikes', 0) * 1.3)
+
+
+def skill_damage_multiplier(skills: dict[str, int]) -> float:
+    power = skills.get('warrior_power_strike', 0)
+    slash = skills.get('warrior_slash_blast', 0)
+    return 1.0 + power * 0.035 + slash * 0.025
+
+
+def mp_cost_per_attack(skills: dict[str, int]) -> float:
+    power = skills.get('warrior_power_strike', 0)
+    slash = skills.get('warrior_slash_blast', 0)
+    return max(0.0, power * 0.35 + slash * 0.55)
