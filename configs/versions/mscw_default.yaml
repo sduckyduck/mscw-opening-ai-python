@@ -40,11 +40,13 @@ drops:
   equip_if_upgrade_score_above: 1.0
 
 routing:
+  exclude_instanced_map_ids: true
   excluded_training_map_ids:
     - 80001100
   excluded_name_keywords:
     - job advancement
     - training camp
     - tutorial
+    - accompaniment
   max_same_map_streak: 8
   max_over_level_gap: 12
