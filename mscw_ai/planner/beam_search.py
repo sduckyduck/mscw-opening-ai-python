@@ -43,18 +43,15 @@ def estimate_map_with_mode(state: BuildState, spot: dict[str, Any], config: dict
     base_acc = stat_derived_accuracy(stats['dex'], stats['luk'])
     acc = base_acc + skill_accuracy(state.skills)
     hit = physical_hit_rate(state.level, float(spot.get('avg_level', 1)), acc, float(spot.get('avg_avoid', 0)))
-
     primary = stats.get(profile.primary_stat, 0.0)
     secondary = sum(stats.get(stat, 0.0) for stat in profile.secondary_stats)
     watk = 17.0 + float(state.gear.get('weapon_attack', 0.0))
     level_penalty = 1.0 / (1.0 + max(0.0, float(spot.get('avg_level', 1)) - state.level) * 0.08)
-    damage_mult = float(mode['damage_mult'])
-    damage = (watk * 2.6 + primary * 1.35 + secondary * 0.35) * hit * level_penalty * damage_mult
+    damage = (watk * 2.6 + primary * 1.35 + secondary * 0.35) * hit * level_penalty * float(mode['damage_mult'])
     kill_seconds = max(0.75, min(22.0, float(spot.get('avg_hp', 1)) / max(1.0, damage) + 0.8))
     kills_per_hour = min(3600.0 / kill_seconds, float(spot.get('total_mob_count', 1)) * 850.0)
     exp_per_hour = kills_per_hour * float(spot.get('avg_exp', 0))
     hours = exp_to_next(state.level) / max(1.0, exp_per_hour)
-
     attacks_needed = kills_per_hour * hours
     mp_cost = float(mode['mp_cost']) * attacks_needed
     death_risk = max(0.0, min(0.45, (float(spot.get('avg_level', 1)) - state.level + 5) / 18.0 - acc / 900.0))
@@ -64,7 +61,6 @@ def estimate_map_with_mode(state: BuildState, spot: dict[str, Any], config: dict
     meso_mult = float(economy.get('meso_income_multiplier', 0.25))
     meso_earned = kills_per_hour * hours * (float(spot.get('avg_level', 1)) * 2.0 + float(spot.get('avg_exp', 0)) * 0.35) * meso_mult
     net_value = exp_per_hour - potion_cost * 4.0 - expected_deaths * 5000.0
-
     return {
         'map_id': spot.get('map_id'),
         'map_name': spot.get('map_name'),
@@ -88,10 +84,8 @@ def estimate_map(state: BuildState, spot: dict[str, Any], config: dict[str, Any]
     return max(estimates, key=lambda item: item['net_value'])
 
 
-def candidate_maps(state: BuildState, spots: list[dict[str, Any]], config: dict[str, Any], top_maps: int) -> list[dict[str, Any]]:
+def _candidate_maps_for_band(state: BuildState, spots: list[dict[str, Any]], config: dict[str, Any], top_maps: int, lo: float, hi: float, fallback: bool) -> list[dict[str, Any]]:
     hard_min_hit = float(config.get('constraints', {}).get('hard_min_hit_rate', 0.55))
-    lo = state.level - 10
-    hi = state.level + int(config.get('constraints', {}).get('max_map_level_gap', 8))
     rows = []
     for spot in spots:
         if not is_training_accessible_map(spot, config):
@@ -102,9 +96,21 @@ def candidate_maps(state: BuildState, spots: list[dict[str, Any]], config: dict[
         est = estimate_map(state, spot, config)
         if est['hit_rate'] < hard_min_hit:
             continue
+        if fallback:
+            level_gap = max(0.0, state.level - avg_level - 10.0)
+            est['net_value'] = round(float(est['net_value']) - level_gap * 2500.0, 2)
+            est['fallback_lower_level'] = True
         rows.append((est['net_value'], est))
     rows.sort(key=lambda x: x[0], reverse=True)
     return [row[1] for row in rows[:top_maps]]
+
+
+def candidate_maps(state: BuildState, spots: list[dict[str, Any]], config: dict[str, Any], top_maps: int) -> list[dict[str, Any]]:
+    max_gap = int(config.get('constraints', {}).get('max_map_level_gap', 8))
+    normal = _candidate_maps_for_band(state, spots, config, top_maps, state.level - 10, state.level + max_gap, False)
+    if normal:
+        return normal
+    return _candidate_maps_for_band(state, spots, config, top_maps, max(1, state.level - 25), state.level + max_gap, True)
 
 
 def route_score(candidate: BuildState, pressure_bonus: float = 0.0) -> float:
@@ -141,6 +147,7 @@ def expand_state(state: BuildState, spots: list[dict[str, Any]], items: list[dic
                     'map': chosen_map['map_name'],
                     'map_id': chosen_map['map_id'],
                     'mobs': chosen_map['mobs'],
+                    'fallback_lower_level': bool(chosen_map.get('fallback_lower_level', False)),
                     'hit_rate': chosen_map['hit_rate'],
                     'accuracy': chosen_map['accuracy'],
                     'hours': chosen_map['hours'],
@@ -156,7 +163,8 @@ def expand_state(state: BuildState, spots: list[dict[str, Any]], items: list[dic
 
 def build_reason(ap: str, sp: str, chosen_map: dict[str, Any]) -> str:
     mobs = ', '.join(chosen_map.get('mobs', [])) or 'unknown mobs'
-    return f"AP {ap}; SP {sp}; use {chosen_map.get('combat_mode')}; fight {mobs}. Hit rate {chosen_map['hit_rate']:.2f}; EXP/hour {chosen_map['exp_per_hour']:.0f}; potion cost {chosen_map['potion_cost']:.0f}."
+    fallback = ' fallback lower-level route;' if chosen_map.get('fallback_lower_level') else ''
+    return f"AP {ap}; SP {sp};{fallback} use {chosen_map.get('combat_mode')}; fight {mobs}. Hit rate {chosen_map['hit_rate']:.2f}; EXP/hour {chosen_map['exp_per_hour']:.0f}; potion cost {chosen_map['potion_cost']:.0f}."
 
 
 def select_beam(expanded: list[BuildState], beam_width: int, config: dict[str, Any]) -> list[BuildState]:
