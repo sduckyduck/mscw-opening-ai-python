@@ -90,12 +90,25 @@ def candidate_maps(state: BuildState, spots: list[dict[str, Any]], config: dict[
     return [row[1] for row in rows[:top_maps]]
 
 
+def route_score(candidate: BuildState, pressure_bonus: float = 0.0) -> float:
+    bankruptcy_penalty = abs(min(0.0, candidate.meso)) * 0.25
+    return (
+        candidate.total_hours * 100.0
+        + candidate.total_potion_cost * 0.02
+        + candidate.expected_deaths * 1000.0
+        + bankruptcy_penalty
+        - max(0.0, candidate.meso) * 0.0003
+        - pressure_bonus
+    )
+
+
 def expand_state(state: BuildState, spots: list[dict[str, Any]], items: list[dict[str, Any]], config: dict[str, Any], top_maps: int) -> list[BuildState]:
     next_states: list[BuildState] = []
     ap_actions = ap_actions_for_job(state.job)
     for ap in ap_actions:
         stats_after_ap = apply_ap(state_stats(state), ap)
         pressure = future_equipment_pressure(items, state.job, state.level, stats_after_ap, lookahead=5)
+        pressure_bonus = sum(pressure.values()) * 0.002
         for sp in available_sp_actions(state.job, state.level, state.skills):
             new_state = state.clone()
             new_state.str_ = stats_after_ap['str']
@@ -111,8 +124,7 @@ def expand_state(state: BuildState, spots: list[dict[str, Any]], items: list[dic
                 candidate.total_potion_cost += chosen_map['potion_cost']
                 candidate.expected_deaths += chosen_map['expected_deaths']
                 candidate.meso += chosen_map['meso_earned'] - chosen_map['potion_cost']
-                pressure_bonus = sum(pressure.values()) * 0.002
-                candidate.score = candidate.total_hours * 100.0 + candidate.total_potion_cost * 0.01 + candidate.expected_deaths * 800.0 - candidate.meso * 0.0005 - pressure_bonus
+                candidate.score = route_score(candidate, pressure_bonus)
                 candidate.route.append({
                     'level': state.level,
                     'ap': ap.label,
@@ -134,7 +146,20 @@ def expand_state(state: BuildState, spots: list[dict[str, Any]], items: list[dic
 
 
 def build_reason(ap: str, sp: str, chosen_map: dict[str, Any]) -> str:
-    return f"AP {ap}; SP {sp}; selected because hit rate {chosen_map['hit_rate']:.2f} and EXP/hour {chosen_map['exp_per_hour']:.0f} are competitive under potion and death constraints."
+    mobs = ', '.join(chosen_map.get('mobs', [])) or 'unknown mobs'
+    return f"AP {ap}; SP {sp}; fight {mobs}. Hit rate {chosen_map['hit_rate']:.2f}; EXP/hour {chosen_map['exp_per_hour']:.0f}; potion cost {chosen_map['potion_cost']:.0f}."
+
+
+def select_beam(expanded: list[BuildState], beam_width: int, config: dict[str, Any]) -> list[BuildState]:
+    economy = config.get('version_rules', {}).get('economy', {})
+    allow_bankruptcy = bool(economy.get('bankruptcy_allowed', False))
+    pool = expanded
+    if not allow_bankruptcy:
+        non_bankrupt = [state for state in expanded if state.meso >= 0]
+        if non_bankrupt:
+            pool = non_bankrupt
+    pool.sort(key=lambda state: state.score)
+    return pool[:beam_width]
 
 
 def plan_route(spots: list[dict[str, Any]], items: list[dict[str, Any]], config: dict[str, Any], job: str, start_level: int, target_level: int, beam_width: int = 40, top_maps: int = 8) -> dict[str, Any]:
@@ -145,8 +170,7 @@ def plan_route(spots: list[dict[str, Any]], items: list[dict[str, Any]], config:
             expanded.extend(expand_state(state, spots, items, config, top_maps))
         if not expanded:
             break
-        expanded.sort(key=lambda state: state.score)
-        beam = expanded[:beam_width]
+        beam = select_beam(expanded, beam_width, config)
     best = min(beam, key=lambda state: state.score)
     return {
         'job': job,
@@ -157,6 +181,7 @@ def plan_route(spots: list[dict[str, Any]], items: list[dict[str, Any]], config:
         'total_hours': round(best.total_hours, 3),
         'total_potion_cost': round(best.total_potion_cost, 1),
         'ending_meso': round(best.meso, 1),
+        'bankrupt': best.meso < 0,
         'expected_deaths': round(best.expected_deaths, 3),
         'final_stats': best.to_dict(),
         'route': best.route,
