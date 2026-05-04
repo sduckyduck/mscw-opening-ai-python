@@ -59,10 +59,12 @@ def main() -> None:
     print(f"Total hours: {result['total_hours']}")
     print(f"Potion cost: {result['total_potion_cost']}")
     print(f"Ending meso: {result['ending_meso']}")
+    print(f"Bankrupt: {result.get('bankrupt', False)}")
     print(f"Expected deaths: {result['expected_deaths']}")
-    for step in result['route'][:8]:
-        print(f"Lv{step['level']}: {step['ap']} | {step['sp']} | {step['map']} | hit {step['hit_rate']}")
-    if len(result['route']) > 8:
+    for step in result['route'][:12]:
+        mobs = ', '.join(step.get('mobs') or [])
+        print(f"Lv{step['level']}: {step['ap']} | {step['sp']} | {step['map']} [{mobs}] | hit {step['hit_rate']} | meso {step['meso_after']}")
+    if len(result['route']) > 12:
         print('...')
 
 
