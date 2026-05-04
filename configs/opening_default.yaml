@@ -1,0 +1,31 @@
+seed: 42
+job: spearman
+start_level: 10
+target_level: 50
+
+constraints:
+  min_hit_rate: 0.75
+  preferred_hit_rate: 0.90
+  max_map_level_gap: 8
+
+reward_weights:
+  completion_per_level: 55.0
+  time_penalty_per_hour: 18.0
+  penalty_per_ko: 180.0
+  potion_cost_weight: 0.00118
+  gear_cost_weight: 0.00083
+  low_hit_penalty: 140.0
+
+training:
+  algorithm: q_learning
+  episodes: 500
+  alpha: 0.22
+  gamma: 0.90
+  epsilon_start: 0.90
+  epsilon_end: 0.05
+
+paths:
+  raw_data_dir: data/raw/app_metadata
+  processed_dir: data/processed
+  model_dir: outputs/models
+  guide_dir: outputs/guides
