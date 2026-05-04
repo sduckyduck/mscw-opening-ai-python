@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import asdict
 from typing import Any
 
 from mscw_ai.planner.actions import ap_actions_for_job, apply_ap
@@ -29,7 +28,16 @@ def state_stats(state: BuildState) -> dict[str, float]:
     return {'str': state.str_, 'dex': state.dex, 'int': state.int_, 'luk': state.luk}
 
 
-def estimate_map(state: BuildState, spot: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+def combat_modes(state: BuildState) -> list[dict[str, float | str]]:
+    modes: list[dict[str, float | str]] = [{'name': 'basic_attack', 'damage_mult': 1.0, 'mp_cost': 0.0}]
+    skill_mult = skill_damage_multiplier(state.skills)
+    skill_mp = mp_cost_per_attack(state.skills)
+    if skill_mult > 1.02 and skill_mp > 0:
+        modes.append({'name': 'skill_attack', 'damage_mult': skill_mult, 'mp_cost': skill_mp})
+    return modes
+
+
+def estimate_map_with_mode(state: BuildState, spot: dict[str, Any], config: dict[str, Any], mode: dict[str, float | str]) -> dict[str, Any]:
     profile = get_job_profile(state.job)
     stats = state_stats(state)
     base_acc = stat_derived_accuracy(stats['dex'], stats['luk'])
@@ -40,25 +48,29 @@ def estimate_map(state: BuildState, spot: dict[str, Any], config: dict[str, Any]
     secondary = sum(stats.get(stat, 0.0) for stat in profile.secondary_stats)
     watk = 17.0 + float(state.gear.get('weapon_attack', 0.0))
     level_penalty = 1.0 / (1.0 + max(0.0, float(spot.get('avg_level', 1)) - state.level) * 0.08)
-    damage = (watk * 2.6 + primary * 1.35 + secondary * 0.35) * hit * level_penalty * skill_damage_multiplier(state.skills)
+    damage_mult = float(mode['damage_mult'])
+    damage = (watk * 2.6 + primary * 1.35 + secondary * 0.35) * hit * level_penalty * damage_mult
     kill_seconds = max(0.75, min(22.0, float(spot.get('avg_hp', 1)) / max(1.0, damage) + 0.8))
     kills_per_hour = min(3600.0 / kill_seconds, float(spot.get('total_mob_count', 1)) * 850.0)
     exp_per_hour = kills_per_hour * float(spot.get('avg_exp', 0))
     hours = exp_to_next(state.level) / max(1.0, exp_per_hour)
 
-    mp_cost = mp_cost_per_attack(state.skills) * kills_per_hour * hours
+    attacks_needed = kills_per_hour * hours
+    mp_cost = float(mode['mp_cost']) * attacks_needed
     death_risk = max(0.0, min(0.45, (float(spot.get('avg_level', 1)) - state.level + 5) / 18.0 - acc / 900.0))
     expected_deaths = death_risk * hours
     potion_cost = mp_cost * 2.0 + expected_deaths * (250 + state.level * 20)
     economy = config.get('version_rules', {}).get('economy', {})
     meso_mult = float(economy.get('meso_income_multiplier', 0.25))
     meso_earned = kills_per_hour * hours * (float(spot.get('avg_level', 1)) * 2.0 + float(spot.get('avg_exp', 0)) * 0.35) * meso_mult
+    net_value = exp_per_hour - potion_cost * 4.0 - expected_deaths * 5000.0
 
     return {
         'map_id': spot.get('map_id'),
         'map_name': spot.get('map_name'),
         'mobs': [m.get('name') for m in (spot.get('mobs') or [])[:3]],
         'avg_level': round(float(spot.get('avg_level', 0)), 2),
+        'combat_mode': str(mode['name']),
         'accuracy': acc,
         'hit_rate': round(hit, 4),
         'hours': round(hours, 4),
@@ -67,7 +79,13 @@ def estimate_map(state: BuildState, spot: dict[str, Any], config: dict[str, Any]
         'potion_cost': round(potion_cost, 1),
         'meso_earned': round(meso_earned, 1),
         'expected_deaths': round(expected_deaths, 4),
+        'net_value': round(net_value, 2),
     }
+
+
+def estimate_map(state: BuildState, spot: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    estimates = [estimate_map_with_mode(state, spot, config, mode) for mode in combat_modes(state)]
+    return max(estimates, key=lambda item: item['net_value'])
 
 
 def candidate_maps(state: BuildState, spots: list[dict[str, Any]], config: dict[str, Any], top_maps: int) -> list[dict[str, Any]]:
@@ -84,28 +102,19 @@ def candidate_maps(state: BuildState, spots: list[dict[str, Any]], config: dict[
         est = estimate_map(state, spot, config)
         if est['hit_rate'] < hard_min_hit:
             continue
-        score = est['exp_per_hour'] - est['potion_cost'] * 4.0 - est['expected_deaths'] * 5000.0
-        rows.append((score, est))
+        rows.append((est['net_value'], est))
     rows.sort(key=lambda x: x[0], reverse=True)
     return [row[1] for row in rows[:top_maps]]
 
 
 def route_score(candidate: BuildState, pressure_bonus: float = 0.0) -> float:
     bankruptcy_penalty = abs(min(0.0, candidate.meso)) * 0.25
-    return (
-        candidate.total_hours * 100.0
-        + candidate.total_potion_cost * 0.02
-        + candidate.expected_deaths * 1000.0
-        + bankruptcy_penalty
-        - max(0.0, candidate.meso) * 0.0003
-        - pressure_bonus
-    )
+    return candidate.total_hours * 100.0 + candidate.total_potion_cost * 0.02 + candidate.expected_deaths * 1000.0 + bankruptcy_penalty - max(0.0, candidate.meso) * 0.0003 - pressure_bonus
 
 
 def expand_state(state: BuildState, spots: list[dict[str, Any]], items: list[dict[str, Any]], config: dict[str, Any], top_maps: int) -> list[BuildState]:
     next_states: list[BuildState] = []
-    ap_actions = ap_actions_for_job(state.job)
-    for ap in ap_actions:
+    for ap in ap_actions_for_job(state.job):
         stats_after_ap = apply_ap(state_stats(state), ap)
         pressure = future_equipment_pressure(items, state.job, state.level, stats_after_ap, lookahead=5)
         pressure_bonus = sum(pressure.values()) * 0.002
@@ -116,8 +125,7 @@ def expand_state(state: BuildState, spots: list[dict[str, Any]], items: list[dic
             new_state.int_ = stats_after_ap['int']
             new_state.luk = stats_after_ap['luk']
             new_state.skills = apply_sp(new_state.skills, sp)
-            maps = candidate_maps(new_state, spots, config, top_maps)
-            for chosen_map in maps:
+            for chosen_map in candidate_maps(new_state, spots, config, top_maps):
                 candidate = new_state.clone()
                 candidate.level += 1
                 candidate.total_hours += chosen_map['hours']
@@ -129,6 +137,7 @@ def expand_state(state: BuildState, spots: list[dict[str, Any]], items: list[dic
                     'level': state.level,
                     'ap': ap.label,
                     'sp': sp.label,
+                    'combat_mode': chosen_map['combat_mode'],
                     'map': chosen_map['map_name'],
                     'map_id': chosen_map['map_id'],
                     'mobs': chosen_map['mobs'],
@@ -147,7 +156,7 @@ def expand_state(state: BuildState, spots: list[dict[str, Any]], items: list[dic
 
 def build_reason(ap: str, sp: str, chosen_map: dict[str, Any]) -> str:
     mobs = ', '.join(chosen_map.get('mobs', [])) or 'unknown mobs'
-    return f"AP {ap}; SP {sp}; fight {mobs}. Hit rate {chosen_map['hit_rate']:.2f}; EXP/hour {chosen_map['exp_per_hour']:.0f}; potion cost {chosen_map['potion_cost']:.0f}."
+    return f"AP {ap}; SP {sp}; use {chosen_map.get('combat_mode')}; fight {mobs}. Hit rate {chosen_map['hit_rate']:.2f}; EXP/hour {chosen_map['exp_per_hour']:.0f}; potion cost {chosen_map['potion_cost']:.0f}."
 
 
 def select_beam(expanded: list[BuildState], beam_width: int, config: dict[str, Any]) -> list[BuildState]:
