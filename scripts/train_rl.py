@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 
 from mscw_ai.rl.q_learning import train_q_learning
-from mscw_ai.sim.environment import OpeningEnvironment
+from mscw_ai.sim.environment_v2 import OpeningEnvironment
 from mscw_ai.utils.io import ensure_dir, read_yaml, write_json
 
 
