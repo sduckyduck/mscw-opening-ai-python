@@ -7,6 +7,12 @@ from typing import Any
 
 from mscw_ai.sim.environment import OpeningEnvironment, POLICY_ACTIONS
 
+DISABLED_POLICY_IDS = {'highacc_shop_greedy'}
+
+
+def active_actions() -> list:
+    return [action for action in POLICY_ACTIONS if action.id not in DISABLED_POLICY_IDS]
+
 
 def train_q_learning(env: OpeningEnvironment, config: dict[str, Any]) -> dict[str, Any]:
     training = config.get('training', {})
@@ -17,8 +23,9 @@ def train_q_learning(env: OpeningEnvironment, config: dict[str, Any]) -> dict[st
     eps_end = float(training.get('epsilon_end', 0.05))
     seed = int(config.get('seed', 42))
     rng = random.Random(seed)
+    actions = active_actions()
 
-    q_values = {action.id: 0.0 for action in POLICY_ACTIONS}
+    q_values = {action.id: 0.0 for action in actions}
     history = []
     best = None
 
@@ -26,9 +33,9 @@ def train_q_learning(env: OpeningEnvironment, config: dict[str, Any]) -> dict[st
         frac = episode / max(1, episodes)
         epsilon = eps_end + (eps_start - eps_end) * math.exp(-4.5 * frac)
         if rng.random() < epsilon:
-            action = rng.choice(POLICY_ACTIONS)
+            action = rng.choice(actions)
         else:
-            action = max(POLICY_ACTIONS, key=lambda a: q_values[a.id])
+            action = max(actions, key=lambda a: q_values[a.id])
 
         result = env.run_policy(action)
         old_q = q_values[action.id]
@@ -53,7 +60,7 @@ def train_q_learning(env: OpeningEnvironment, config: dict[str, Any]) -> dict[st
         if best is None or result.reward > best['result']['reward']:
             best = {'action': asdict(action), 'result': asdict(result)}
 
-    learned_action = max(POLICY_ACTIONS, key=lambda a: q_values[a.id])
+    learned_action = max(actions, key=lambda a: q_values[a.id])
     learned_result = env.run_policy(learned_action)
     if best is None or learned_result.reward >= best['result']['reward']:
         best = {'action': asdict(learned_action), 'result': asdict(learned_result)}
@@ -61,7 +68,8 @@ def train_q_learning(env: OpeningEnvironment, config: dict[str, Any]) -> dict[st
     return {
         'algorithm': 'q_learning',
         'episodes': episodes,
-        'q_values': {a.label: round(q_values[a.id], 4) for a in POLICY_ACTIONS},
+        'disabled_policy_ids': sorted(DISABLED_POLICY_IDS),
+        'q_values': {a.label: round(q_values[a.id], 4) for a in actions},
         'best': best,
         'history': history,
     }
