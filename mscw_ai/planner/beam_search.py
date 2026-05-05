@@ -22,6 +22,17 @@ from mscw_ai.sim.exp_table import exp_to_next
 from mscw_ai.sim.map_rules import is_training_accessible_map
 
 
+def planner_weights(config: dict[str, Any]) -> dict[str, float]:
+    planner = config.get('version_rules', {}).get('planner', {})
+    return {
+        'map_potion_cost_weight': float(planner.get('map_potion_cost_weight', 1.2)),
+        'map_death_penalty': float(planner.get('map_death_penalty', 5000.0)),
+        'route_potion_cost_weight': float(planner.get('route_potion_cost_weight', 0.02)),
+        'route_time_weight': float(planner.get('route_time_weight', 100.0)),
+        'route_death_penalty': float(planner.get('route_death_penalty', 1000.0)),
+    }
+
+
 def initial_state(job: str, start_level: int) -> BuildState:
     if job in {'fighter', 'page', 'spearman'}:
         return BuildState(start_level, job, 45, 25, 4, 4, 450, 100, 0)
@@ -44,6 +55,7 @@ def combat_modes(state: BuildState, spot: dict[str, Any]) -> list[dict[str, floa
 
 
 def estimate_map_with_mode(state: BuildState, spot: dict[str, Any], config: dict[str, Any], mode: dict[str, float | str]) -> dict[str, Any]:
+    weights = planner_weights(config)
     profile = get_job_profile(state.job)
     stats = state_stats(state)
     base_acc = stat_derived_accuracy(stats['dex'], stats['luk'])
@@ -77,7 +89,7 @@ def estimate_map_with_mode(state: BuildState, spot: dict[str, Any], config: dict
     economy = config.get('version_rules', {}).get('economy', {})
     meso_mult = float(economy.get('meso_income_multiplier', 0.25))
     meso_earned = kills_per_hour * hours * (float(spot.get('avg_level', 1)) * 2.0 + float(spot.get('avg_exp', 0)) * 0.35) * meso_mult
-    net_value = exp_per_hour - potion_cost * 4.0 - expected_deaths * 5000.0
+    net_value = exp_per_hour - potion_cost * weights['map_potion_cost_weight'] - expected_deaths * weights['map_death_penalty']
     return {
         'map_id': spot.get('map_id'),
         'map_name': spot.get('map_name'),
@@ -134,9 +146,10 @@ def candidate_maps(state: BuildState, spots: list[dict[str, Any]], config: dict[
     return _candidate_maps_for_band(state, spots, config, top_maps, max(1, state.level - 25), state.level + max_gap, True)
 
 
-def route_score(candidate: BuildState, pressure_bonus: float = 0.0) -> float:
+def route_score(candidate: BuildState, config: dict[str, Any], pressure_bonus: float = 0.0) -> float:
+    weights = planner_weights(config)
     bankruptcy_penalty = abs(min(0.0, candidate.meso)) * 0.25
-    return candidate.total_hours * 100.0 + candidate.total_potion_cost * 0.02 + candidate.expected_deaths * 1000.0 + bankruptcy_penalty - max(0.0, candidate.meso) * 0.0003 - pressure_bonus
+    return candidate.total_hours * weights['route_time_weight'] + candidate.total_potion_cost * weights['route_potion_cost_weight'] + candidate.expected_deaths * weights['route_death_penalty'] + bankruptcy_penalty - max(0.0, candidate.meso) * 0.0003 - pressure_bonus
 
 
 def expand_state(state: BuildState, spots: list[dict[str, Any]], items: list[dict[str, Any]], config: dict[str, Any], top_maps: int) -> list[BuildState]:
@@ -159,7 +172,7 @@ def expand_state(state: BuildState, spots: list[dict[str, Any]], items: list[dic
                 candidate.total_potion_cost += chosen_map['potion_cost']
                 candidate.expected_deaths += chosen_map['expected_deaths']
                 candidate.meso += chosen_map['meso_earned'] - chosen_map['potion_cost']
-                candidate.score = route_score(candidate, pressure_bonus)
+                candidate.score = route_score(candidate, config, pressure_bonus)
                 candidate.route.append({
                     'level': state.level,
                     'ap': ap.label,
