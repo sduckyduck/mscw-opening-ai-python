@@ -40,6 +40,22 @@ BASIC_SKILLS_BY_JOB = {
 }
 
 
+def skill_rules_for_job(job: str) -> list[SkillRule]:
+    return BASIC_SKILLS_BY_JOB.get(job, [])
+
+
+def skill_rule_by_id(job: str, skill_id: str) -> SkillRule | None:
+    for rule in skill_rules_for_job(job):
+        if rule.skill_id == skill_id:
+            return rule
+    return None
+
+
+def skill_cap(job: str, skill_id: str) -> int:
+    rule = skill_rule_by_id(job, skill_id)
+    return rule.max_level if rule else 0
+
+
 def sp_for_level(level: int) -> int:
     if level < 10:
         return 0
@@ -54,10 +70,9 @@ def available_sp_actions(job: str, level: int, skills: dict[str, int]) -> list[S
     points = sp_for_level(level)
     if points <= 0:
         return []
-    rules = BASIC_SKILLS_BY_JOB.get(job, [])
     actions: list[SpAction] = []
     stage = stage_for_level(level)
-    for rule in rules:
+    for rule in skill_rules_for_job(job):
         if rule.stage > stage:
             continue
         current = skills.get(rule.skill_id, 0)
@@ -110,9 +125,7 @@ def attack_skill_modes(skills: dict[str, int], mob_density: float = 1.0) -> list
 
 
 def skill_damage_multiplier(skills: dict[str, int]) -> float:
-    power = skills.get('warrior_power_strike', 0)
-    slash = skills.get('warrior_slash_blast', 0)
-    return passive_damage_multiplier(skills) + power * 0.0 + slash * 0.0
+    return passive_damage_multiplier(skills)
 
 
 def skill_speed_multiplier(skills: dict[str, int]) -> float:
@@ -139,5 +152,4 @@ def buff_mp_cost_per_hour(skills: dict[str, int]) -> float:
 
 
 def mp_cost_per_attack(skills: dict[str, int]) -> float:
-    # Deprecated compatibility helper. Active attack costs are now emitted by attack_skill_modes().
     return 0.0
