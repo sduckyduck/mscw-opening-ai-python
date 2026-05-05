@@ -6,7 +6,16 @@ from mscw_ai.planner.actions import ap_actions_for_job, apply_ap
 from mscw_ai.planner.equipment_requirements import future_equipment_pressure
 from mscw_ai.planner.job_profiles import get_job_profile
 from mscw_ai.planner.models import BuildState
-from mscw_ai.planner.skills import available_sp_actions, apply_sp, mp_cost_per_attack, skill_accuracy, skill_damage_multiplier
+from mscw_ai.planner.skills import (
+    available_sp_actions,
+    apply_sp,
+    damage_reduction_from_skills,
+    hp_mp_survival_multiplier,
+    mp_cost_per_attack,
+    skill_accuracy,
+    skill_damage_multiplier,
+    skill_speed_multiplier,
+)
 from mscw_ai.sim.accuracy import physical_hit_rate, stat_derived_accuracy
 from mscw_ai.sim.exp_table import exp_to_next
 from mscw_ai.sim.map_rules import is_training_accessible_map
@@ -47,16 +56,24 @@ def estimate_map_with_mode(state: BuildState, spot: dict[str, Any], config: dict
     secondary = sum(stats.get(stat, 0.0) for stat in profile.secondary_stats)
     watk = 17.0 + float(state.gear.get('weapon_attack', 0.0))
     level_penalty = 1.0 / (1.0 + max(0.0, float(spot.get('avg_level', 1)) - state.level) * 0.08)
+    speed_mult = skill_speed_multiplier(state.skills)
     damage = (watk * 2.6 + primary * 1.35 + secondary * 0.35) * hit * level_penalty * float(mode['damage_mult'])
-    kill_seconds = max(0.75, min(22.0, float(spot.get('avg_hp', 1)) / max(1.0, damage) + 0.8))
+    kill_seconds = max(0.65, min(22.0, (float(spot.get('avg_hp', 1)) / max(1.0, damage) + 0.8) / speed_mult))
     kills_per_hour = min(3600.0 / kill_seconds, float(spot.get('total_mob_count', 1)) * 850.0)
     exp_per_hour = kills_per_hour * float(spot.get('avg_exp', 0))
     hours = exp_to_next(state.level) / max(1.0, exp_per_hour)
     attacks_needed = kills_per_hour * hours
     mp_cost = float(mode['mp_cost']) * attacks_needed
-    death_risk = max(0.0, min(0.45, (float(spot.get('avg_level', 1)) - state.level + 5) / 18.0 - acc / 900.0))
+
+    survival_mult = hp_mp_survival_multiplier(state.skills)
+    damage_reduction = damage_reduction_from_skills(state.skills)
+    contact_pressure = max(0.0, float(spot.get('avg_level', 1)) - state.level + 6.0)
+    contact_events = kills_per_hour * hours * min(0.18, 0.035 + contact_pressure * 0.008)
+    hp_potion_cost = contact_events * (state.level * 1.1 + float(spot.get('avg_level', 1)) * 0.9) * (1.0 - damage_reduction) / survival_mult
+
+    death_risk = max(0.0, min(0.45, (float(spot.get('avg_level', 1)) - state.level + 5) / 18.0 - acc / 900.0)) / survival_mult
     expected_deaths = death_risk * hours
-    potion_cost = mp_cost * 2.0 + expected_deaths * (250 + state.level * 20)
+    potion_cost = mp_cost * 2.0 + hp_potion_cost + expected_deaths * (250 + state.level * 20)
     economy = config.get('version_rules', {}).get('economy', {})
     meso_mult = float(economy.get('meso_income_multiplier', 0.25))
     meso_earned = kills_per_hour * hours * (float(spot.get('avg_level', 1)) * 2.0 + float(spot.get('avg_exp', 0)) * 0.35) * meso_mult
@@ -73,6 +90,8 @@ def estimate_map_with_mode(state: BuildState, spot: dict[str, Any], config: dict
         'exp_per_hour': round(exp_per_hour, 1),
         'kills_per_hour': round(kills_per_hour, 1),
         'potion_cost': round(potion_cost, 1),
+        'hp_potion_cost': round(hp_potion_cost, 1),
+        'mp_potion_cost': round(mp_cost * 2.0, 1),
         'meso_earned': round(meso_earned, 1),
         'expected_deaths': round(expected_deaths, 4),
         'net_value': round(net_value, 2),
@@ -152,6 +171,8 @@ def expand_state(state: BuildState, spots: list[dict[str, Any]], items: list[dic
                     'accuracy': chosen_map['accuracy'],
                     'hours': chosen_map['hours'],
                     'potion_cost': chosen_map['potion_cost'],
+                    'hp_potion_cost': chosen_map.get('hp_potion_cost', 0.0),
+                    'mp_potion_cost': chosen_map.get('mp_potion_cost', 0.0),
                     'meso_earned': chosen_map['meso_earned'],
                     'meso_after': round(candidate.meso, 1),
                     'expected_deaths': chosen_map['expected_deaths'],
@@ -164,7 +185,7 @@ def expand_state(state: BuildState, spots: list[dict[str, Any]], items: list[dic
 def build_reason(ap: str, sp: str, chosen_map: dict[str, Any]) -> str:
     mobs = ', '.join(chosen_map.get('mobs', [])) or 'unknown mobs'
     fallback = ' fallback lower-level route;' if chosen_map.get('fallback_lower_level') else ''
-    return f"AP {ap}; SP {sp};{fallback} use {chosen_map.get('combat_mode')}; fight {mobs}. Hit rate {chosen_map['hit_rate']:.2f}; EXP/hour {chosen_map['exp_per_hour']:.0f}; potion cost {chosen_map['potion_cost']:.0f}."
+    return f"AP {ap}; SP {sp};{fallback} use {chosen_map.get('combat_mode')}; fight {mobs}. Hit rate {chosen_map['hit_rate']:.2f}; EXP/hour {chosen_map['exp_per_hour']:.0f}; HP pot {chosen_map.get('hp_potion_cost', 0):.0f}; MP pot {chosen_map.get('mp_potion_cost', 0):.0f}."
 
 
 def select_beam(expanded: list[BuildState], beam_width: int, config: dict[str, Any]) -> list[BuildState]:
