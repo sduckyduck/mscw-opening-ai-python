@@ -83,11 +83,36 @@ def skill_accuracy(skills: dict[str, int]) -> int:
     return first_job_acc + max(spear_mastery_acc, polearm_mastery_acc)
 
 
+def passive_damage_multiplier(skills: dict[str, int]) -> float:
+    mastery = max(skills.get('spearman_spear_mastery', 0), skills.get('spearman_polearm_mastery', 0))
+    return 1.0 + mastery * 0.012
+
+
+def attack_skill_modes(skills: dict[str, int], mob_density: float = 1.0) -> list[dict[str, float | str]]:
+    modes: list[dict[str, float | str]] = [{'name': 'basic_attack', 'damage_mult': 1.0, 'mp_cost': 0.0, 'mob_factor': 1.0}]
+    power = skills.get('warrior_power_strike', 0)
+    slash = skills.get('warrior_slash_blast', 0)
+    if power > 0:
+        modes.append({
+            'name': 'power_strike',
+            'damage_mult': 1.0 + power / 20.0 * 1.6,
+            'mp_cost': 5.0 + power * 0.35,
+            'mob_factor': 1.0,
+        })
+    if slash > 0:
+        modes.append({
+            'name': 'slash_blast',
+            'damage_mult': 0.9 + slash / 20.0 * 0.8,
+            'mp_cost': 7.0 + slash * 0.45,
+            'mob_factor': min(3.0, max(1.0, mob_density)),
+        })
+    return modes
+
+
 def skill_damage_multiplier(skills: dict[str, int]) -> float:
     power = skills.get('warrior_power_strike', 0)
     slash = skills.get('warrior_slash_blast', 0)
-    mastery = max(skills.get('spearman_spear_mastery', 0), skills.get('spearman_polearm_mastery', 0))
-    return 1.0 + power * 0.035 + slash * 0.025 + mastery * 0.012
+    return passive_damage_multiplier(skills) + power * 0.0 + slash * 0.0
 
 
 def skill_speed_multiplier(skills: dict[str, int]) -> float:
@@ -106,9 +131,13 @@ def damage_reduction_from_skills(skills: dict[str, int]) -> float:
     return min(0.18, iron_will * 0.006)
 
 
-def mp_cost_per_attack(skills: dict[str, int]) -> float:
-    power = skills.get('warrior_power_strike', 0)
-    slash = skills.get('warrior_slash_blast', 0)
+def buff_mp_cost_per_hour(skills: dict[str, int]) -> float:
     booster = max(skills.get('spearman_spear_booster', 0), skills.get('spearman_polearm_booster', 0))
     hyper_body = skills.get('spearman_hyper_body', 0)
-    return max(0.0, power * 0.35 + slash * 0.55 + booster * 0.05 + hyper_body * 0.04)
+    iron_will = skills.get('spearman_iron_will', 0)
+    return booster * 18.0 + hyper_body * 16.0 + iron_will * 8.0
+
+
+def mp_cost_per_attack(skills: dict[str, int]) -> float:
+    # Deprecated compatibility helper. Active attack costs are now emitted by attack_skill_modes().
+    return 0.0
