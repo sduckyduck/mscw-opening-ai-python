@@ -7,13 +7,14 @@ from mscw_ai.planner.equipment_requirements import future_equipment_pressure
 from mscw_ai.planner.job_profiles import get_job_profile
 from mscw_ai.planner.models import BuildState
 from mscw_ai.planner.skills import (
+    attack_skill_modes,
     available_sp_actions,
     apply_sp,
+    buff_mp_cost_per_hour,
     damage_reduction_from_skills,
     hp_mp_survival_multiplier,
-    mp_cost_per_attack,
+    passive_damage_multiplier,
     skill_accuracy,
-    skill_damage_multiplier,
     skill_speed_multiplier,
 )
 from mscw_ai.sim.accuracy import physical_hit_rate, stat_derived_accuracy
@@ -37,13 +38,9 @@ def state_stats(state: BuildState) -> dict[str, float]:
     return {'str': state.str_, 'dex': state.dex, 'int': state.int_, 'luk': state.luk}
 
 
-def combat_modes(state: BuildState) -> list[dict[str, float | str]]:
-    modes: list[dict[str, float | str]] = [{'name': 'basic_attack', 'damage_mult': 1.0, 'mp_cost': 0.0}]
-    skill_mult = skill_damage_multiplier(state.skills)
-    skill_mp = mp_cost_per_attack(state.skills)
-    if skill_mult > 1.02 and skill_mp > 0:
-        modes.append({'name': 'skill_attack', 'damage_mult': skill_mult, 'mp_cost': skill_mp})
-    return modes
+def combat_modes(state: BuildState, spot: dict[str, Any]) -> list[dict[str, float | str]]:
+    mob_density = min(3.0, max(1.0, float(spot.get('total_mob_count', 1)) / 12.0))
+    return attack_skill_modes(state.skills, mob_density=mob_density)
 
 
 def estimate_map_with_mode(state: BuildState, spot: dict[str, Any], config: dict[str, Any], mode: dict[str, float | str]) -> dict[str, Any]:
@@ -57,13 +54,15 @@ def estimate_map_with_mode(state: BuildState, spot: dict[str, Any], config: dict
     watk = 17.0 + float(state.gear.get('weapon_attack', 0.0))
     level_penalty = 1.0 / (1.0 + max(0.0, float(spot.get('avg_level', 1)) - state.level) * 0.08)
     speed_mult = skill_speed_multiplier(state.skills)
-    damage = (watk * 2.6 + primary * 1.35 + secondary * 0.35) * hit * level_penalty * float(mode['damage_mult'])
+    mob_factor = float(mode.get('mob_factor', 1.0))
+    damage = (watk * 2.6 + primary * 1.35 + secondary * 0.35) * hit * level_penalty * passive_damage_multiplier(state.skills) * float(mode['damage_mult'])
     kill_seconds = max(0.65, min(22.0, (float(spot.get('avg_hp', 1)) / max(1.0, damage) + 0.8) / speed_mult))
-    kills_per_hour = min(3600.0 / kill_seconds, float(spot.get('total_mob_count', 1)) * 850.0)
+    kills_per_hour = min((3600.0 / kill_seconds) * mob_factor, float(spot.get('total_mob_count', 1)) * 850.0)
     exp_per_hour = kills_per_hour * float(spot.get('avg_exp', 0))
     hours = exp_to_next(state.level) / max(1.0, exp_per_hour)
-    attacks_needed = kills_per_hour * hours
-    mp_cost = float(mode['mp_cost']) * attacks_needed
+    attacks_needed = kills_per_hour * hours / max(1.0, mob_factor)
+    active_mp_cost = float(mode['mp_cost']) * attacks_needed
+    buff_mp_cost = buff_mp_cost_per_hour(state.skills) * hours
 
     survival_mult = hp_mp_survival_multiplier(state.skills)
     damage_reduction = damage_reduction_from_skills(state.skills)
@@ -73,7 +72,8 @@ def estimate_map_with_mode(state: BuildState, spot: dict[str, Any], config: dict
 
     death_risk = max(0.0, min(0.45, (float(spot.get('avg_level', 1)) - state.level + 5) / 18.0 - acc / 900.0)) / survival_mult
     expected_deaths = death_risk * hours
-    potion_cost = mp_cost * 2.0 + hp_potion_cost + expected_deaths * (250 + state.level * 20)
+    mp_potion_cost = (active_mp_cost + buff_mp_cost) * 2.0
+    potion_cost = mp_potion_cost + hp_potion_cost + expected_deaths * (250 + state.level * 20)
     economy = config.get('version_rules', {}).get('economy', {})
     meso_mult = float(economy.get('meso_income_multiplier', 0.25))
     meso_earned = kills_per_hour * hours * (float(spot.get('avg_level', 1)) * 2.0 + float(spot.get('avg_exp', 0)) * 0.35) * meso_mult
@@ -91,7 +91,9 @@ def estimate_map_with_mode(state: BuildState, spot: dict[str, Any], config: dict
         'kills_per_hour': round(kills_per_hour, 1),
         'potion_cost': round(potion_cost, 1),
         'hp_potion_cost': round(hp_potion_cost, 1),
-        'mp_potion_cost': round(mp_cost * 2.0, 1),
+        'mp_potion_cost': round(mp_potion_cost, 1),
+        'active_mp_cost': round(active_mp_cost * 2.0, 1),
+        'buff_mp_cost': round(buff_mp_cost * 2.0, 1),
         'meso_earned': round(meso_earned, 1),
         'expected_deaths': round(expected_deaths, 4),
         'net_value': round(net_value, 2),
@@ -99,7 +101,7 @@ def estimate_map_with_mode(state: BuildState, spot: dict[str, Any], config: dict
 
 
 def estimate_map(state: BuildState, spot: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
-    estimates = [estimate_map_with_mode(state, spot, config, mode) for mode in combat_modes(state)]
+    estimates = [estimate_map_with_mode(state, spot, config, mode) for mode in combat_modes(state, spot)]
     return max(estimates, key=lambda item: item['net_value'])
 
 
@@ -173,6 +175,8 @@ def expand_state(state: BuildState, spots: list[dict[str, Any]], items: list[dic
                     'potion_cost': chosen_map['potion_cost'],
                     'hp_potion_cost': chosen_map.get('hp_potion_cost', 0.0),
                     'mp_potion_cost': chosen_map.get('mp_potion_cost', 0.0),
+                    'active_mp_cost': chosen_map.get('active_mp_cost', 0.0),
+                    'buff_mp_cost': chosen_map.get('buff_mp_cost', 0.0),
                     'meso_earned': chosen_map['meso_earned'],
                     'meso_after': round(candidate.meso, 1),
                     'expected_deaths': chosen_map['expected_deaths'],
